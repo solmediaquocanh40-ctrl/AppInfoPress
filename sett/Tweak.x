@@ -493,17 +493,22 @@ static BOOL AIPSpecifiersContainKind(NSArray *specifiers, NSString *kind) {
     return NO;
 }
 
-// Kiểu ô cho 2 nút mới: mượn kiểu của mục cuối trang (trên trang chi tiết,
-// mục cuối chính là nút Xoá ứng dụng) để nút hiện đúng dáng nút bấm gốc.
+// Kiểu ô cho 2 nút mới: mượn đúng kiểu của 2 nút Gỡ bỏ / Xoá ứng dụng trên
+// trang (theo log máy thật iOS 16.3.1, hai nút đó dùng kiểu ô 13 — mượn
+// nhầm kiểu khác là nút gắn vào danh sách mà không hiện lên màn hình).
 static NSInteger AIPCellTypeForNewButtons(NSArray *specifiers) {
-    for (NSInteger i = (NSInteger)specifiers.count - 1; i >= 0; i--) {
-        id specifier = specifiers[(NSUInteger)i];
-        if ([specifier respondsToSelector:@selector(cellType)]) {
-            NSInteger cellType = ((NSInteger (*)(id, SEL))objc_msgSend)(specifier, @selector(cellType));
-            if (cellType > 0) return cellType;
+    for (id specifier in specifiers ?: @[]) {
+        NSString *name = AIPSpecifierName(specifier);
+        NSString *identifier = AIPSpecifierIdentifier(specifier);
+        if (AIPTextContainsAny(name, @[@"gỡ bỏ", @"xóa ứng dụng", @"xoá ứng dụng", @"offload", @"delete"]) ||
+            AIPTextContainsAny(identifier, @[@"offload", @"delete"])) {
+            if ([specifier respondsToSelector:@selector(cellType)]) {
+                NSInteger cellType = ((NSInteger (*)(id, SEL))objc_msgSend)(specifier, @selector(cellType));
+                if (cellType > 0) return cellType;
+            }
         }
     }
-    return 8; // PSButtonCell theo header Preferences kinh điển
+    return 13;
 }
 
 #pragma mark - Yêu cầu nhảy trang đang chờ (phía SpringBoard ghi vào prefs)
@@ -587,6 +592,22 @@ static NSArray *AIPRawSpecifiers(id controller) {
     return nil;
 }
 
+static char AIPReloadScheduledKey;
+
+// Nhờ trang nạp lại danh sách đúng 1 lần sau khi gắn nút: nếu bảng đã dựng
+// xong từ trước khi hook kịp gắn nút thì lần nạp lại này mới đưa nút lên hình.
+static void AIPSchedulReloadOnce(id controller) {
+    if (![controller respondsToSelector:@selector(reloadSpecifiers)]) return;
+    if (objc_getAssociatedObject(controller, &AIPReloadScheduledKey)) return;
+    objc_setAssociatedObject(controller, &AIPReloadScheduledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        @try {
+            ((void (*)(id, SEL))objc_msgSend)(controller, @selector(reloadSpecifiers));
+            AIPLog(@"Trang %@: da nho nap lai danh sach sau khi gan nut", NSStringFromClass([controller class]));
+        } @catch (NSException *exception) { }
+    });
+}
+
 static NSArray *AIPProcessSpecifiers(id controller, NSArray *specifiers) {
     if (!specifiers) return specifiers;
     @try {
@@ -601,6 +622,17 @@ static NSArray *AIPProcessSpecifiers(id controller, NSArray *specifiers) {
             if (bundleID.length > 0 && ![bundleID isEqualToString:lastLoggedDetailApp]) {
                 lastLoggedDetailApp = [bundleID copy];
                 AIPLog(@"Trang dung luong cua app: %@ (class %@)", bundleID, className);
+            }
+            if (bundleID.length == 0) {
+                static __weak id lastUnresolvedController = nil;
+                if (lastUnresolvedController != controller) {
+                    lastUnresolvedController = controller;
+                    PSSpecifier *parent = AIPParentSpecifierOfController(controller);
+                    id userInfo = parent ? AIPSpecifierProperty(parent, @"userInfo") : nil;
+                    NSString *keys = [userInfo isKindOfClass:[NSDictionary class]] ? [[(NSDictionary *)userInfo allKeys] componentsJoinedByString:@","] : @"-";
+                    NSString *title = [controller isKindOfClass:[UIViewController class]] ? [(UIViewController *)controller title] : nil;
+                    AIPLog(@"Trang chi tiet: CHUA do duoc ma app — title='%@', specifier cha id='%@', userInfo keys=%@", title ?: @"", AIPSpecifierIdentifier(parent) ?: @"", keys);
+                }
             }
             NSTimeInterval age = 0;
             NSString *pending = AIPPendingBundleID(&age);
@@ -619,6 +651,7 @@ static NSArray *AIPProcessSpecifiers(id controller, NSArray *specifiers) {
                     [extended addObject:clear];
                     [extended addObject:reset];
                     AIPLog(@"Trang %@: da them 2 nut Reset/Clear (app %@, cellType %ld)", className, bundleID ?: @"chua ro", (long)cellType);
+                    AIPSchedulReloadOnce(controller);
                     return [extended copy];
                 }
                 AIPLog(@"Trang %@: tao 2 nut that bai", className);
@@ -716,6 +749,67 @@ static id AIPFindStorageListController(void) {
 static NSInteger gJumpAttempts = 0;
 static NSString *gLastPendingSeen = nil;
 
+#pragma mark - Tự bấm dẫn đường (khi URL chỉ mở được Cài đặt mà chưa vào tới Dung lượng)
+
+static NSString *gHopBid = nil;
+static NSTimeInterval gHopLastAt = 0;
+static NSTimeInterval gHopStorageAt = 0;
+static NSTimeInterval gHopGeneralAt = 0;
+
+static BOOL AIPIsStorageRowSpecifier(id specifier) {
+    NSString *identifier = AIPSpecifierIdentifier(specifier);
+    if (identifier.length > 0 && [identifier containsString:@"STORAGE_MGMT"]) return YES;
+    NSString *name = AIPSpecifierName(specifier);
+    return AIPTextContainsAny(name, @[@"dung lượng iphone", @"iphone storage"]);
+}
+
+static BOOL AIPIsGeneralRowSpecifier(id specifier) {
+    NSString *identifier = AIPSpecifierIdentifier(specifier);
+    if ([identifier isEqualToString:@"General"]) return YES;
+    NSString *name = AIPSpecifierName(specifier);
+    return AIPTextContainsAny(name, @[@"cài đặt chung"]);
+}
+
+// Chỉ nhìn trang đang hiện trước mắt: thấy mục Dung lượng iPhone thì bấm
+// vào, chưa có thì bấm vào Cài đặt chung trước. Mỗi nấc cách nhau 1 giây
+// để trang kịp dựng. Nhờ vậy khâu nhảy không còn phụ thuộc vào nấc nhảy
+// thứ hai của đường link (nấc đó hay rớt khi Cài đặt mở nguội).
+static void AIPMaybeHopTowardStorage(NSString *bundleID) {
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (![bundleID isEqualToString:gHopBid]) {
+        gHopBid = [bundleID copy];
+        gHopStorageAt = 0;
+        gHopGeneralAt = 0;
+    }
+    if (now - gHopLastAt < 1.0) return;
+    UIViewController *top = AIPVisibleTopController();
+    if (!top || ![top respondsToSelector:@selector(specifiers)]) return;
+    NSArray *specifiers = AIPRawSpecifiers(top);
+    if (specifiers.count == 0) return;
+    if (now - gHopStorageAt > 2.0) {
+        for (id specifier in specifiers) {
+            if (AIPIsStorageRowSpecifier(specifier)) {
+                gHopStorageAt = now;
+                gHopLastAt = now;
+                AIPLog(@"Dung luong: thay muc Dung luong iPhone o trang %@, tu bam vao", NSStringFromClass([top class]));
+                if (AIPSelectSpecifier(top, specifier)) AIPLog(@"Dung luong: da tu bam vao muc Dung luong iPhone");
+                return;
+            }
+        }
+    }
+    if (now - gHopGeneralAt > 2.0) {
+        for (id specifier in specifiers) {
+            if (AIPIsGeneralRowSpecifier(specifier)) {
+                gHopGeneralAt = now;
+                gHopLastAt = now;
+                AIPLog(@"Dung luong: thay muc Cai dat chung o trang %@, tu bam vao", NSStringFromClass([top class]));
+                if (AIPSelectSpecifier(top, specifier)) AIPLog(@"Dung luong: da tu bam vao Cai dat chung");
+                return;
+            }
+        }
+    }
+}
+
 static void AIPAttemptPendingJump(void) {
     NSTimeInterval age = 0;
     NSString *bundleID = AIPPendingBundleID(&age);
@@ -740,11 +834,13 @@ static void AIPAttemptPendingJump(void) {
     id candidate = gAppsListController ?: AIPFindStorageListController() ?: gLastStorageListController;
     if (!candidate) {
         if (shouldLog) AIPLog(@"Dung luong: lan thu %ld — chua thay trang danh sach dung luong", (long)gJumpAttempts);
+        AIPMaybeHopTowardStorage(bundleID);
         return;
     }
     NSArray *specifiers = AIPRawSpecifiers(candidate);
     if (specifiers.count == 0) {
         if (shouldLog) AIPLog(@"Dung luong: lan thu %ld — danh sach dang nap (0 muc)", (long)gJumpAttempts);
+        AIPMaybeHopTowardStorage(bundleID);
         return;
     }
     NSString *appName = AIPAppNameForBundleID(bundleID, @"");
@@ -759,6 +855,7 @@ static void AIPAttemptPendingJump(void) {
         }
     }
     if (shouldLog) AIPLog(@"Dung luong: lan thu %ld — %@ co %lu muc, chua thay %@", (long)gJumpAttempts, NSStringFromClass([candidate class]), (unsigned long)specifiers.count, bundleID);
+    AIPMaybeHopTowardStorage(bundleID);
 }
 
 static NSTimer *gPendingTimer = nil;

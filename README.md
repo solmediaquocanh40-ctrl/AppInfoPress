@@ -1,4 +1,4 @@
-# AppInfoPress 1.0.2
+# AppInfoPress 1.0.3
 
 Mình là Quoc. Cái tweak này ra đời từ một thói quen bên Android mà mình rất nhớ khi dùng iPhone: ấn giữ icon của một app là hiện ngay mục **Thông tin ứng dụng** — bấm một cái là tới thẳng trang quản lý của app đó, xem dung lượng, xoá bộ nhớ đệm, đặt lại app. Bên iOS thì không có: mỗi lần muốn xoá cache hay xem app nào ngốn dung lượng là phải mở Cài đặt, vào Cài đặt chung, vào Dung lượng iPhone, chờ nó tải danh sách, rồi cuộn tìm đúng app. Mất cả phút cho một việc đáng ra chỉ cần hai chạm.
 
@@ -24,6 +24,13 @@ AppInfoPress gộp hai việc đó vào một tweak duy nhất: phần ngoài m�
 - Xoá bộ nhớ đệm chỉ dọn thư mục cache và tmp của app; vài app giấu cache ở chỗ khác (ví dụ dữ liệu web) thì con số giải phóng được sẽ ít hơn kỳ vọng.
 - Tweak chạy trên máy jailbreak của mình: iPhone 12 Pro, iOS 16.3.1, Dopamine rootless. Máy khác, iOS khác chưa được kiểm chứng.
 
+## Có gì mới ở 1.0.3
+
+Đọc log máy thật của bản 1.0.2 thì thấy hai chuyện rõ ràng. Một: mỗi lần ấn giữ icon là Cài đặt mở nguội từ đầu, và nấc nhảy thứ hai của đường link (từ Cài đặt chung vào Dung lượng iPhone) bị rớt — Cài đặt cứ đứng ở các trang ngoài nên bên trong không có gì để chạy tiếp. Hai: ở các phiên cũ trong cùng file log, nút từng được gắn vào danh sách của trang chi tiết nhưng không hiện lên hình, vì kiểu ô của nút không khớp với kiểu ô nút bấm thật của trang. Bản này sửa cả hai:
+
+- **Tự bấm dẫn đường:** bộ theo dõi trong Cài đặt giờ tự nhìn trang đang hiện: thấy mục **Cài đặt chung** thì bấm vào, thấy mục **Dung lượng iPhone** thì bấm tiếp, rồi mới chọn đúng app như trước. Không còn phụ thuộc vào nấc nhảy của đường link nữa — mở nguội hay mở nóng đều đi hết đường.
+- **Nút dùng đúng kiểu ô của nút Gỡ bỏ / Xoá ứng dụng** (kiểu 13 theo log máy thật), và sau khi gắn nút, trang được nhờ nạp lại danh sách một lần để nút chắc chắn lên hình.
+
 ## Có gì mới ở 1.0.2
 
 Bản 1.0.1 vẫn chưa hiện 2 nút và nhảy chưa tới nơi. Lần này mình đọc log thật trên máy (file log ghi lại toàn bộ hoạt động trong Cài đặt) và tìm được đúng nguyên nhân, sửa trúng từng điểm:
@@ -41,6 +48,6 @@ Bản 1.0.0 cài chạy được nhưng test máy thật lộ hai lỗi, bản n
 
 ## Build
 
-Source Theos (gồm 3 phần: `sb` chích SpringBoard lo menu ấn giữ, `sett` chích Cài đặt lo 2 nút trang dung lượng, `prefs` là trang cài đặt của tweak). File workflow mẫu tên `build-appinfopress-1.0.2.yml` phải được đẩy vào `.github/workflows/build.yml` trên GitHub (GitHub không có sẵn), rồi **commit mới** — nút Re-run chỉ chạy lại workflow của commit cũ. Workflow chạy trên `macos-latest`, có cài `ldid`, xuất 3 bản rootful / rootless / roothide.
+Source Theos (gồm 3 phần: `sb` chích SpringBoard lo menu ấn giữ, `sett` chích Cài đặt lo 2 nút trang dung lượng, `prefs` là trang cài đặt của tweak). File workflow mẫu tên `build-appinfopress-1.0.3.yml` phải được đẩy vào `.github/workflows/build.yml` trên GitHub (GitHub không có sẵn), rồi **commit mới** — nút Re-run chỉ chạy lại workflow của commit cũ. Workflow chạy trên `macos-latest`, có cài `ldid`, xuất 3 bản rootful / rootless / roothide.
 
 Gói: `com.anhdang.appinfopress` — made by Quoc.
