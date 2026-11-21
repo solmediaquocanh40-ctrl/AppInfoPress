@@ -92,14 +92,15 @@ static void AIPOpenURL(NSString *urlString, void (^fallback)(void)) {
     }];
 }
 
+static void AIPOpenAppStorage(NSString *bundleID);
+
 static void AIPOpenAppInfo(NSString *bundleID) {
-    NSString *first = [NSString stringWithFormat:@"App-prefs:root=%@", bundleID];
-    NSString *second = [NSString stringWithFormat:@"prefs:root=%@", bundleID];
-    AIPOpenURL(first, ^{
-        AIPOpenURL(second, ^{
-            AIPOpenURL(@"App-prefs:", nil);
-        });
-    });
+    // Theo yêu cầu của Quoc (2026-11-21): "Thông tin ứng dụng" phải mở thẳng
+    // trang của app trong Cài đặt chung -> Dung lượng iPhone (trang có Gỡ bỏ
+    // ứng dụng / Xoá ứng dụng và 2 nút Reset App / Clear App's Cache bên dưới),
+    // giống trang App info của Android — dùng chung đường nhảy với mục
+    // "Dung lượng & bộ nhớ đệm", không mở trang cài đặt riêng của app nữa.
+    AIPOpenAppStorage(bundleID);
 }
 
 static void AIPOpenAppStorage(NSString *bundleID) {

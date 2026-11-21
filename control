@@ -1,6 +1,6 @@
 Package: com.anhdang.appinfopress
 Name: AppInfoPress
-Version: 1.0.0
+Version: 1.0.1
 Architecture: iphoneos-arm
 Description: Ấn giữ icon ngoài màn hình chính là có ngay: Thông tin ứng dụng, Dung lượng & bộ nhớ đệm, Xoá bộ nhớ đệm, Đặt lại app — như trang thông tin ứng dụng của Android; kèm 2 nút Reset App / Clear App's Cache trong trang dung lượng của từng app ở Cài đặt. Long-press any home-screen icon for App info, Storage, Clear cache and Reset app, plus CacheClearer-style buttons in Settings.
 Maintainer: Quoc

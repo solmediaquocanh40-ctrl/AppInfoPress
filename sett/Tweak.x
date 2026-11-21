@@ -4,8 +4,15 @@
 //      của từng app (Cài đặt chung -> Dung lượng iPhone -> app), kiểu CacheClearer.
 //   2) Khi phía SpringBoard xin mở trang dung lượng của 1 app cụ thể, tự nhảy tiếp
 //      từ danh sách dung lượng vào đúng app đó.
-// Toàn bộ hook bằng MSHookMessageEx lên PSListController + dò specifier, có log
-// chẩn đoán lớp Storage để tinh chỉnh theo máy thật. Lỗi ở đâu cũng bỏ qua êm.
+// Bản 1.0.1: bản 1.0.0 không hiện nút trên máy thật. Ba hướng sửa:
+//   - Hook -specifiers không chỉ ở lớp cha PSListController mà quét và hook riêng
+//     từng class chứa "Storage" (các class này nạp muộn, nên quét lại nhiều lần).
+//   - Nhận diện trang chi tiết nới lỏng: chỉ cần cặp Gỡ bỏ + Xoá là đủ (bản cũ đòi
+//     thêm dòng dung lượng — mà dòng đó trên iOS 16 nằm ở phần đầu trang tự vẽ,
+//     không phải specifier, nên không bao giờ khớp).
+//   - Khâu tự nhảy vào app: thử lại nhiều lần bằng bộ theo dõi nền thay vì thử
+//     đúng một lần sau 0.4 giây (danh sách dung lượng nạp app dần dần).
+// Mọi hook đều bọc @try, lỗi ở đâu cũng bỏ qua êm, không làm sập Cài đặt.
 
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
@@ -41,6 +48,9 @@
 @end
 
 static __weak id gDetailController = nil;
+static __weak id gLastStorageListController = nil;
+static NSMutableDictionary<NSString *, NSValue *> *gSpecOriginals = nil;
+static int gJumpAttemptCount = 0;
 
 #pragma mark - Tiện ích
 
@@ -111,34 +121,55 @@ static NSString *AIPBundleIDForAppName(NSString *appName) {
     return nil;
 }
 
-// Tìm bundle id của app mà trang chi tiết đang hiển thị, từ specifier cha.
+// Tìm bundle id của app mà trang chi tiết đang hiển thị.
+// Thứ tự dò: chính controller -> specifier cha (identifier / userInfo /
+// property) -> khớp tên app.
 static NSString *AIPResolveDetailBundleID(id controller) {
+    if (!controller) return nil;
+    NSArray<NSString *> *controllerSelectors = @[@"applicationProxy", @"application", @"appProxy", @"storageApp", @"bundleIdentifier", @"applicationIdentifier"];
+    for (NSString *selName in controllerSelectors) {
+        SEL sel = NSSelectorFromString(selName);
+        if ([controller respondsToSelector:sel]) {
+            @try {
+                id value = ((id (*)(id, SEL))objc_msgSend)(controller, sel);
+                NSString *bid = AIPBundleIDFromObject(value);
+                if (bid) return bid;
+            } @catch (NSException *exception) {}
+        }
+    }
     id parent = nil;
     if ([controller respondsToSelector:@selector(specifier)]) {
         parent = ((id (*)(id, SEL))objc_msgSend)(controller, @selector(specifier));
     }
-    if (!parent) return nil;
-    NSString *bid = AIPBundleIDFromObject([parent identifier]);
-    if (bid) return bid;
-    if ([parent respondsToSelector:@selector(userInfo)]) {
-        NSDictionary *info = ((NSDictionary *(*)(id, SEL))objc_msgSend)(parent, @selector(userInfo));
-        if ([info isKindOfClass:[NSDictionary class]]) {
-            static NSMutableSet<NSString *> *loggedControllers = nil;
-            if (!loggedControllers) loggedControllers = [NSMutableSet set];
-            NSString *pointerKey = [NSString stringWithFormat:@"%p", controller];
-            if (![loggedControllers containsObject:pointerKey]) {
-                [loggedControllers addObject:pointerKey];
-                AIPLog(@"Trang dung luong: userInfo cua specifier cha co cac khoa: %@", [info allKeys]);
+    if (parent) {
+        NSString *bid = AIPBundleIDFromObject([parent respondsToSelector:@selector(identifier)] ? [parent identifier] : nil);
+        if (bid) return bid;
+        if ([parent respondsToSelector:@selector(userInfo)]) {
+            NSDictionary *info = ((NSDictionary *(*)(id, SEL))objc_msgSend)(parent, @selector(userInfo));
+            if ([info isKindOfClass:[NSDictionary class]]) {
+                static NSMutableSet<NSString *> *loggedControllers = nil;
+                if (!loggedControllers) loggedControllers = [NSMutableSet set];
+                NSString *pointerKey = [NSString stringWithFormat:@"%p", controller];
+                if (![loggedControllers containsObject:pointerKey]) {
+                    [loggedControllers addObject:pointerKey];
+                    AIPLog(@"Trang dung luong: userInfo cua specifier cha co cac khoa: %@", [info allKeys]);
+                }
+                for (id key in info) {
+                    bid = AIPBundleIDFromObject(info[key]);
+                    if (bid) return bid;
+                }
             }
-            for (id key in info) {
-                bid = AIPBundleIDFromObject(info[key]);
+        }
+        if ([parent respondsToSelector:@selector(propertyForKey:)]) {
+            for (NSString *key in @[@"application", @"app", @"bundleIdentifier", @"bundleID", @"applicationIdentifier"]) {
+                bid = AIPBundleIDFromObject([parent propertyForKey:key]);
                 if (bid) return bid;
             }
         }
+        bid = AIPBundleIDForAppName([parent respondsToSelector:@selector(name)] ? [parent name] : nil);
+        if (bid) return bid;
     }
-    bid = AIPBundleIDForAppName([parent name]);
-    if (bid) return bid;
-    return nil;
+    return AIPBundleIDForAppName([controller title]);
 }
 
 #pragma mark - Helper xử lý 2 nút
@@ -233,9 +264,7 @@ static NSString *AIPResolveDetailBundleID(id controller) {
 
 @end
 
-#pragma mark - Hook PSListController -specifiers
-
-static NSArray *(*AIPOriginalSpecifiers)(id self, SEL _cmd) = NULL;
+#pragma mark - Nhận diện trang + tạo nút
 
 static id AIPMakeButtonSpecifier(NSString *title, SEL action, int cellType, NSString *kind, NSString *bundleID) {
     Class specClass = NSClassFromString(@"PSSpecifier");
@@ -256,7 +285,9 @@ static id AIPMakeButtonSpecifier(NSString *title, SEL action, int cellType, NSSt
     return spec;
 }
 
-static BOOL AIPIsStorageDetailPage(NSArray *specifiers, int *deleteCellTypeOut) {
+// Trang chi tiết dung lượng của 1 app. Bản 1.0.1 nới lỏng: cặp Gỡ bỏ + Xoá là đủ
+// (bản 1.0.0 đòi thêm dòng dung lượng — trên iOS 16 dòng đó không phải specifier).
+static BOOL AIPIsStorageDetailPage(NSArray *specifiers, NSString *controllerClassName, int *deleteCellTypeOut) {
     BOOL hasOffload = NO;
     BOOL hasSize = NO;
     BOOL hasDelete = NO;
@@ -272,7 +303,9 @@ static BOOL AIPIsStorageDetailPage(NSArray *specifiers, int *deleteCellTypeOut) 
             }
         }
     }
-    return (hasOffload && hasSize) || (hasSize && hasDelete);
+    BOOL classLooksDetail = [controllerClassName containsString:@"Storage"] &&
+        ([controllerClassName containsString:@"Detail"] || [controllerClassName containsString:@"App"]);
+    return (hasOffload && hasDelete) || (hasOffload && hasSize) || (hasSize && hasDelete) || (hasDelete && classLooksDetail);
 }
 
 static BOOL AIPAlreadyInjected(NSArray *specifiers) {
@@ -285,66 +318,229 @@ static BOOL AIPAlreadyInjected(NSArray *specifiers) {
     return NO;
 }
 
-static void AIPTryPendingStorageJump(id controller, NSArray *specifiers) {
-    NSDictionary *prefs = AIPLoadPrefs();
-    NSString *pendingApp = prefs[@"pendingStorageApp"];
-    NSNumber *pendingAt = prefs[@"pendingStorageAt"];
-    if (![pendingApp isKindOfClass:[NSString class]] || pendingApp.length == 0) return;
-    if ([pendingAt isKindOfClass:[NSNumber class]] && [[NSDate date] timeIntervalSince1970] - [pendingAt doubleValue] > 30) {
-        AIPSetPrefValue(@"pendingStorageApp", nil);
-        return;
+// Ghi log 1 lần cho mỗi class đáng ngờ: tên class + toàn bộ specifier của nó.
+// Đây là bằng chứng để vòng sửa sau (nếu còn) đánh trúng ngay lần đầu.
+static void AIPDumpSpecifiersOnce(id controller, NSArray *specifiers) {
+    NSString *className = NSStringFromClass([controller class]) ?: @"";
+    BOOL interesting = [className containsString:@"Storage"];
+    if (!interesting) {
+        for (id spec in specifiers) {
+            NSString *name = AIPLower([spec respondsToSelector:@selector(name)] ? [spec name] : nil);
+            if ([name containsString:@"offload"] || [name containsString:@"delete"] ||
+                [name containsString:@"xoá"] || [name containsString:@"gỡ bỏ"]) { interesting = YES; break; }
+        }
     }
-    NSString *controllerClass = NSStringFromClass([controller class]) ?: @"";
-    if (![controllerClass containsString:@"Storage"]) return;
-    NSString *appName = AIPAppNameForBundleID(pendingApp, @"");
-    id matched = nil;
+    if (!interesting) return;
+    static NSMutableSet<NSString *> *dumped = nil;
+    if (!dumped) dumped = [NSMutableSet set];
+    @synchronized (dumped) {
+        if ([dumped containsObject:className]) return;
+        [dumped addObject:className];
+    }
+    NSMutableString *dump = [NSMutableString stringWithFormat:@"Trang %@ (%d specifiers):", className, (int)specifiers.count];
     for (id spec in specifiers) {
-        if ([AIPBundleIDFromObject([spec respondsToSelector:@selector(identifier)] ? [spec identifier] : nil) isEqualToString:pendingApp]) { matched = spec; break; }
+        NSString *name = [spec respondsToSelector:@selector(name)] ? [spec name] : nil;
+        NSString *identifier = [spec respondsToSelector:@selector(identifier)] ? [spec identifier] : nil;
+        int cellType = -1;
+        if ([spec respondsToSelector:@selector(cellType)]) cellType = ((int (*)(id, SEL))objc_msgSend)(spec, @selector(cellType));
+        [dump appendFormat:@"\n  - name='%@' id='%@' cell=%d", name ?: @"", identifier ?: @"", cellType];
+    }
+    AIPLog(@"%@", dump);
+}
+
+#pragma mark - Lấy specifiers gốc (không qua hook)
+
+static IMP AIPOriginalForClass(Class cls) {
+    while (cls) {
+        NSValue *value = gSpecOriginals[NSStringFromClass(cls)];
+        if (value) return (IMP)[value pointerValue];
+        cls = class_getSuperclass(cls);
+    }
+    return NULL;
+}
+
+static BOOL AIPClassHasOwnMethod(Class cls, SEL sel) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == sel) { found = YES; break; }
+    }
+    free(methods);
+    return found;
+}
+
+static NSArray *AIPRawSpecifiers(id controller) {
+    if (!controller) return nil;
+    Class cls = [controller class];
+    // Class tự viết lại -specifiers nhưng chưa kịp hook thì gọi thẳng như thường
+    // (đó chính là bản gốc của nó), tránh gọi nhầm bản gốc của lớp cha.
+    if (AIPClassHasOwnMethod(cls, @selector(specifiers)) && !gSpecOriginals[NSStringFromClass(cls)]) {
+        if ([controller respondsToSelector:@selector(specifiers)]) return [controller specifiers];
+        return nil;
+    }
+    IMP orig = AIPOriginalForClass(cls);
+    if (orig) return ((NSArray *(*)(id, SEL))orig)(controller, @selector(specifiers));
+    if ([controller respondsToSelector:@selector(specifiers)]) return [controller specifiers];
+    return nil;
+}
+
+#pragma mark - Tự nhảy vào app trong danh sách dung lượng
+
+static id AIPMatchSpecifier(NSArray *specifiers, NSString *bundleID, NSString *appName) {
+    for (id spec in specifiers) {
+        if ([AIPBundleIDFromObject([spec respondsToSelector:@selector(identifier)] ? [spec identifier] : nil) isEqualToString:bundleID]) return spec;
         if ([spec respondsToSelector:@selector(userInfo)]) {
             NSDictionary *info = ((NSDictionary *(*)(id, SEL))objc_msgSend)(spec, @selector(userInfo));
             if ([info isKindOfClass:[NSDictionary class]]) {
                 for (id key in info) {
-                    if ([AIPBundleIDFromObject(info[key]) isEqualToString:pendingApp]) { matched = spec; break; }
+                    if ([AIPBundleIDFromObject(info[key]) isEqualToString:bundleID]) return spec;
                 }
             }
-            if (matched) break;
         }
-        if (appName.length > 0 && [[spec name] isEqualToString:appName]) { matched = spec; break; }
-    }
-    if (!matched) return;
-    AIPSetPrefValue(@"pendingStorageApp", nil);
-    AIPLog(@"Dung luong: tim thay %@ trong danh sach, tu nhay vao", pendingApp);
-    id target = controller;
-    id targetSpec = matched;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        @try {
-            NSIndexPath *indexPath = [target indexPathForSpecifier:targetSpec];
-            UITableView *table = [target table];
-            if (indexPath && table) {
-                [target tableView:table didSelectRowAtIndexPath:indexPath];
-                AIPLog(@"Dung luong: da nhay vao trang cua app");
-            } else {
-                AIPLog(@"Dung luong: khong lay duoc indexPath/table de nhay");
+        if ([spec respondsToSelector:@selector(propertyForKey:)]) {
+            for (NSString *key in @[@"application", @"app", @"bundleIdentifier", @"bundleID", @"applicationIdentifier"]) {
+                if ([AIPBundleIDFromObject([spec propertyForKey:key]) isEqualToString:bundleID]) return spec;
             }
-        } @catch (NSException *exception) {
-            AIPLog(@"Dung luong: nhay that bai: %@", exception.reason);
         }
+        if (appName.length > 0 && [spec respondsToSelector:@selector(name)] && [[spec name] isEqualToString:appName]) return spec;
+    }
+    return nil;
+}
+
+// Trả YES chỉ khi đã chọn được dòng của app. Thất bại có thể phát hiện được thì
+// giữ nguyên yêu cầu chờ để bộ theo dõi thử lại ở nhịp sau.
+static BOOL AIPTryJumpWithController(id controller, NSArray *specifiers, NSString *pendingApp) {
+    if (!controller || !specifiers || pendingApp.length == 0) return NO;
+    NSString *appName = AIPAppNameForBundleID(pendingApp, @"");
+    id matched = AIPMatchSpecifier(specifiers, pendingApp, appName);
+    if (!matched) return NO;
+    if (![controller respondsToSelector:@selector(indexPathForSpecifier:)] ||
+        ![controller respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) return NO;
+    NSIndexPath *indexPath = ((NSIndexPath *(*)(id, SEL, id))objc_msgSend)(controller, @selector(indexPathForSpecifier:), matched);
+    UITableView *table = nil;
+    if ([controller respondsToSelector:@selector(table)]) table = ((UITableView *(*)(id, SEL))objc_msgSend)(controller, @selector(table));
+    if (!table && [controller respondsToSelector:@selector(tableView)]) table = ((UITableView *(*)(id, SEL))objc_msgSend)(controller, @selector(tableView));
+    if (!indexPath || !table) {
+        AIPLog(@"Dung luong: thay %@ trong danh sach nhung chua lay duoc indexPath/table, thu lai sau", pendingApp);
+        return NO;
+    }
+    AIPSetPrefValue(@"pendingStorageApp", nil);
+    AIPLog(@"Dung luong: tu nhay vao trang cua %@", pendingApp);
+    @try {
+        ((void (*)(id, SEL, id, id))objc_msgSend)(controller, @selector(tableView:didSelectRowAtIndexPath:), table, indexPath);
+    } @catch (NSException *exception) {
+        AIPLog(@"Dung luong: nhay that bai: %@", exception.reason);
+    }
+    return YES;
+}
+
+static void AIPCollectControllers(UIViewController *vc, NSMutableArray *out) {
+    if (!vc) return;
+    [out addObject:vc];
+    if ([vc isKindOfClass:[UINavigationController class]]) {
+        for (UIViewController *child in [(UINavigationController *)vc viewControllers]) AIPCollectControllers(child, out);
+    }
+    if ([vc isKindOfClass:[UITabBarController class]]) {
+        for (UIViewController *child in [(UITabBarController *)vc viewControllers]) AIPCollectControllers(child, out);
+    }
+    for (UIViewController *child in vc.childViewControllers) AIPCollectControllers(child, out);
+    AIPCollectControllers(vc.presentedViewController, out);
+}
+
+// Tìm controller của trang danh sách dung lượng trong cây view controller hiện tại
+// (phòng khi trang đã mở sẵn từ trước và hook -specifiers không chạy lại).
+static id AIPFindStorageControllerInHierarchy(void) {
+    NSMutableArray *all = [NSMutableArray array];
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *window in [(UIWindowScene *)scene windows]) {
+            AIPCollectControllers(window.rootViewController, all);
+        }
+    }
+    for (UIViewController *vc in all) {
+        NSString *name = NSStringFromClass([vc class]) ?: @"";
+        if (![name containsString:@"Storage"]) continue;
+        if (![vc respondsToSelector:@selector(specifiers)]) continue;
+        NSArray *specs = AIPRawSpecifiers(vc);
+        int cellType = 3;
+        if (specs && !AIPIsStorageDetailPage(specs, name, &cellType)) return vc;
+    }
+    return nil;
+}
+
+static void AIPAttemptPendingJump(void) {
+    @try {
+        NSDictionary *prefs = AIPLoadPrefs();
+        NSString *pendingApp = prefs[@"pendingStorageApp"];
+        NSNumber *pendingAt = prefs[@"pendingStorageAt"];
+        if (![pendingApp isKindOfClass:[NSString class]] || pendingApp.length == 0) {
+            gJumpAttemptCount = 0;
+            return;
+        }
+        if ([pendingAt isKindOfClass:[NSNumber class]] && [[NSDate date] timeIntervalSince1970] - [pendingAt doubleValue] > 30) {
+            AIPSetPrefValue(@"pendingStorageApp", nil);
+            AIPLog(@"Dung luong: yeu cau nhay vao %@ da qua 30 giay, huy", pendingApp);
+            return;
+        }
+        if (!AIPPrefEnabled(prefs, @"enabled", YES)) return;
+        gJumpAttemptCount++;
+        BOOL verbose = (gJumpAttemptCount <= 3 || gJumpAttemptCount % 5 == 0);
+        id controller = gLastStorageListController;
+        if (!controller) controller = AIPFindStorageControllerInHierarchy();
+        if (!controller) {
+            if (verbose) AIPLog(@"Dung luong: lan thu %d — chua thay trang danh sach dung luong", gJumpAttemptCount);
+            return;
+        }
+        NSArray *specs = AIPRawSpecifiers(controller);
+        if (!specs) {
+            if (verbose) AIPLog(@"Dung luong: lan thu %d — trang danh sach chua co specifiers", gJumpAttemptCount);
+            return;
+        }
+        NSString *className = NSStringFromClass([controller class]) ?: @"";
+        int cellType = 3;
+        if (AIPIsStorageDetailPage(specs, className, &cellType)) {
+            NSString *bid = AIPResolveDetailBundleID(controller);
+            if ([bid isEqualToString:pendingApp]) {
+                AIPSetPrefValue(@"pendingStorageApp", nil);
+                AIPLog(@"Dung luong: dang o dung trang cua %@ — xong", pendingApp);
+            }
+            return;
+        }
+        if (!AIPTryJumpWithController(controller, specs, pendingApp) && verbose) {
+            AIPLog(@"Dung luong: lan thu %d — chua thay %@ trong danh sach", gJumpAttemptCount, pendingApp);
+        }
+    } @catch (NSException *exception) {
+        AIPLog(@"Thu nhay trang dung luong loi: %@", exception.reason);
+    }
+}
+
+// Bộ theo dõi nền: cứ 2 giây kiểm tra một lần xem có yêu cầu nhảy đang chờ không.
+// Danh sách dung lượng nạp app dần, thử một lần như bản 1.0.0 rất dễ hụt.
+static void AIPPendingWatcherTick(void) {
+    AIPAttemptPendingJump();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AIPPendingWatcherTick();
     });
 }
 
-static NSArray *AIPSpecifiersHook(id self, SEL _cmd) {
-    if (!AIPOriginalSpecifiers) return nil;
-    NSArray *specifiers = AIPOriginalSpecifiers(self, _cmd);
+#pragma mark - Hook -specifiers (dùng chung cho mọi class đã hook)
+
+static void AIPScanAndHookStorageClasses(void);
+
+static NSArray *AIPProcessSpecifiers(id controller, NSArray *specifiers) {
     @try {
         if (!specifiers) return specifiers;
+        AIPScanAndHookStorageClasses();
         NSDictionary *prefs = AIPLoadPrefs();
         if (!AIPPrefEnabled(prefs, @"enabled", YES)) return specifiers;
-
+        NSString *className = NSStringFromClass([controller class]) ?: @"";
+        AIPDumpSpecifiersOnce(controller, specifiers);
         int cellType = 3; // PSButtonCell
-        if (AIPIsStorageDetailPage(specifiers, &cellType)) {
-            gDetailController = self;
+        if (AIPIsStorageDetailPage(specifiers, className, &cellType)) {
+            gDetailController = controller;
             if (AIPPrefEnabled(prefs, @"settingsButtons", YES) && !AIPAlreadyInjected(specifiers)) {
-                NSString *bundleID = AIPResolveDetailBundleID(self);
+                NSString *bundleID = AIPResolveDetailBundleID(controller);
                 AIPLog(@"Trang dung luong cua app: %@ — them 2 nut AppInfoPress", bundleID ?: @"(chua ro)");
                 NSMutableArray *extended = [specifiers mutableCopy];
                 id reset = AIPMakeButtonSpecifier(@"Reset App", @selector(aipResetTapped:), cellType, @"reset", bundleID);
@@ -355,14 +551,99 @@ static NSArray *AIPSpecifiersHook(id self, SEL _cmd) {
             }
             return specifiers;
         }
-        AIPTryPendingStorageJump(self, specifiers);
+        if ([className containsString:@"Storage"]) {
+            gLastStorageListController = controller;
+            NSString *pendingApp = prefs[@"pendingStorageApp"];
+            if ([pendingApp isKindOfClass:[NSString class]] && pendingApp.length > 0) {
+                AIPTryJumpWithController(controller, specifiers, pendingApp);
+            }
+        }
     } @catch (NSException *exception) {
-        AIPLog(@"Hook specifiers loi: %@", exception.reason);
+        AIPLog(@"Xu ly specifiers loi: %@", exception.reason);
     }
     return specifiers;
 }
 
-#pragma mark - Khởi động
+static NSArray *AIPSpecifiersHookGeneric(id self, SEL _cmd) {
+    IMP orig = AIPOriginalForClass([self class]);
+    if (!orig) return nil;
+    NSArray *specifiers = ((NSArray *(*)(id, SEL))orig)(self, _cmd);
+    return AIPProcessSpecifiers(self, specifiers);
+}
+
+#pragma mark - Hook viewWillAppear (bắt các trang Storage hiện lên)
+
+static void (*AIPOriginalViewWillAppear)(id, SEL, BOOL) = NULL;
+
+static void AIPViewWillAppearHook(id self, SEL _cmd, BOOL animated) {
+    if (AIPOriginalViewWillAppear) AIPOriginalViewWillAppear(self, _cmd, animated);
+    @try {
+        NSString *className = NSStringFromClass([self class]) ?: @"";
+        if ([className containsString:@"Storage"]) {
+            AIPScanAndHookStorageClasses();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                AIPAttemptPendingJump();
+            });
+        }
+    } @catch (NSException *exception) {}
+}
+
+#pragma mark - Quét + cài hook
+
+static void AIPHookSpecifiersForClass(Class cls) {
+    if (!gSpecOriginals) gSpecOriginals = [NSMutableDictionary dictionary];
+    NSString *key = NSStringFromClass(cls);
+    if (gSpecOriginals[key]) return;
+    IMP orig = NULL;
+    MSHookMessageEx(cls, @selector(specifiers), (IMP)AIPSpecifiersHookGeneric, &orig);
+    if (orig) {
+        gSpecOriginals[key] = [NSValue valueWithPointer:(void *)orig];
+        AIPLog(@"Cai dat: da hook -specifiers cua %@", key);
+    } else {
+        AIPLog(@"Cai dat: hook -specifiers cua %@ THAT BAI", key);
+    }
+}
+
+static void AIPLogStorageClasses(void) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (unsigned int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        if ([name containsString:@"Storage"]) {
+            NSString *superName = NSStringFromClass(class_getSuperclass(classes[i])) ?: @"?";
+            [names addObject:[NSString stringWithFormat:@"%@ (cha: %@)", name, superName]];
+        }
+    }
+    free(classes);
+    [names sortUsingSelector:@selector(compare:)];
+    NSString *dump = [names componentsJoinedByString:@", "];
+    static NSString *lastDump = nil;
+    if (![dump isEqualToString:lastDump]) {
+        lastDump = [dump copy];
+        AIPLog(@"Cac class chua 'Storage' trong Cai dat: %@", dump);
+    }
+}
+
+// Các class Storage thường chỉ nạp khi người dùng mò vào Cài đặt chung, nên phải
+// quét lại nhiều lần (có chống spam 5 giây) mới bắt được hết.
+static void AIPScanAndHookStorageClasses(void) {
+    static NSDate *lastScan = nil;
+    NSDate *now = [NSDate date];
+    if (lastScan && [now timeIntervalSinceDate:lastScan] < 5.0) return;
+    lastScan = now;
+    AIPLogStorageClasses();
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    for (unsigned int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        if (![name containsString:@"Storage"]) continue;
+        if (AIPClassHasOwnMethod(classes[i], @selector(specifiers))) {
+            AIPHookSpecifiersForClass(classes[i]);
+        }
+    }
+    free(classes);
+}
 
 static void AIPInstallHook(int attempt) {
     Class listClass = NSClassFromString(@"PSListController");
@@ -376,25 +657,19 @@ static void AIPInstallHook(int attempt) {
         }
         return;
     }
-    MSHookMessageEx(listClass, @selector(specifiers), (IMP)AIPSpecifiersHook, (IMP *)&AIPOriginalSpecifiers);
-    AIPLog(@"Cai dat: da hook PSListController -specifiers");
-}
-
-static void AIPLogStorageClasses(void) {
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    NSMutableArray<NSString *> *names = [NSMutableArray array];
-    for (unsigned int i = 0; i < count; i++) {
-        NSString *name = NSStringFromClass(classes[i]);
-        if ([name containsString:@"Storage"]) [names addObject:name];
+    AIPHookSpecifiersForClass(listClass);
+    if (!AIPOriginalViewWillAppear) {
+        MSHookMessageEx(listClass, @selector(viewWillAppear:), (IMP)AIPViewWillAppearHook, (IMP *)&AIPOriginalViewWillAppear);
     }
-    free(classes);
-    AIPLog(@"Cac class chua 'Storage' trong Cai dat: %@", [names componentsJoinedByString:@", "]);
+    AIPScanAndHookStorageClasses();
+    AIPLog(@"Cai dat: da cai hook xong (PSListController + quet class Storage)");
 }
 
 %ctor {
     NSDictionary *prefs = AIPLoadPrefs();
     AIPLog(@"AppInfoPress (Cai dat) da nap — enabled=%@, settingsButtons=%@", AIPPrefEnabled(prefs, @"enabled", YES) ? @"YES" : @"NO", AIPPrefEnabled(prefs, @"settingsButtons", YES) ? @"YES" : @"NO");
-    AIPLogStorageClasses();
     AIPInstallHook(0);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        AIPPendingWatcherTick();
+    });
 }
