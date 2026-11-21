@@ -548,7 +548,7 @@ static void AIPTryJumpWithSpecifiers(id controller, NSArray *specifiers) {
     NSTimeInterval age = 0;
     NSString *bundleID = AIPPendingBundleID(&age);
     if (!bundleID || specifiers.count == 0) return;
-    NSString *appName = AIPAppNameForBundleID(bundleID, nil);
+    NSString *appName = AIPAppNameForBundleID(bundleID, @"");
     for (id specifier in specifiers) {
         if (AIPSpecifierMatchesApp(specifier, bundleID, appName)) {
             if (AIPSelectSpecifier(controller, specifier)) {
@@ -747,7 +747,7 @@ static void AIPAttemptPendingJump(void) {
         if (shouldLog) AIPLog(@"Dung luong: lan thu %ld — danh sach dang nap (0 muc)", (long)gJumpAttempts);
         return;
     }
-    NSString *appName = AIPAppNameForBundleID(bundleID, nil);
+    NSString *appName = AIPAppNameForBundleID(bundleID, @"");
     for (id specifier in specifiers) {
         if (AIPSpecifierMatchesApp(specifier, bundleID, appName)) {
             if (AIPSelectSpecifier(candidate, specifier)) {
