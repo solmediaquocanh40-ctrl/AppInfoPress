@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>AppInfoPress</string>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>CHUNG</string>
+			<key>footerText</key>
+			<string>Ấn giữ bất kỳ icon nào ngoài màn hình chính là có thêm các mục kiểu Android: Thông tin ứng dụng, Dung lượng &amp; bộ nhớ đệm, Xoá bộ nhớ đệm và Đặt lại app — khỏi phải mò vào Cài đặt tìm từng app nữa.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>label</key>
+			<string>Bật AppInfoPress</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>MENU ẤN GIỮ ICON</string>
+			<key>footerText</key>
+			<string>Bật/tắt từng mục trong menu ấn giữ. Xoá bộ nhớ đệm chỉ xoá cache, giữ nguyên tài liệu và đăng nhập. Đặt lại app xoá sạch dữ liệu của app (có hỏi xác nhận 2 lần).</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>showInfo</string>
+			<key>label</key>
+			<string>Hiện mục: Thông tin ứng dụng</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>showStorage</string>
+			<key>label</key>
+			<string>Hiện mục: Dung lượng &amp; bộ nhớ đệm</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>showClear</string>
+			<key>label</key>
+			<string>Hiện mục: Xoá bộ nhớ đệm</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>showReset</string>
+			<key>label</key>
+			<string>Hiện mục: Đặt lại app</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>TRONG CÀI ĐẶT</string>
+			<key>footerText</key>
+			<string>Thêm 2 nút Reset App và Clear App's Cache vào trang dung lượng của từng app (Cài đặt chung → Dung lượng iPhone → chọn app), giống tweak CacheClearer. Nếu máy đang cài CacheClearer thì tắt mục này hoặc gỡ CacheClearer ra, để cả hai là trang dung lượng hiện trùng 2 cặp nút.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>settingsButtons</string>
+			<key>label</key>
+			<string>Thêm 2 nút vào trang dung lượng của app</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>KHÁC</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<true/>
+			<key>defaults</key>
+			<string>com.anhdang.appinfopress</string>
+			<key>key</key>
+			<string>debug</string>
+			<key>label</key>
+			<string>Ghi log gỡ lỗi (Documents/AppInfoPress.log)</string>
+			<key>PostNotification</key>
+			<string>com.anhdang.appinfopress/prefsChanged</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>AppInfoPress 1.0.0 — made by Quoc. Gói: com.anhdang.appinfopress.</string>
+		</dict>
+	</array>
+</dict>
+</plist>
