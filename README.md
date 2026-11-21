@@ -1,4 +1,4 @@
-# AppInfoPress 1.0.1
+# AppInfoPress 1.0.2
 
 Mình là Quoc. Cái tweak này ra đời từ một thói quen bên Android mà mình rất nhớ khi dùng iPhone: ấn giữ icon của một app là hiện ngay mục **Thông tin ứng dụng** — bấm một cái là tới thẳng trang quản lý của app đó, xem dung lượng, xoá bộ nhớ đệm, đặt lại app. Bên iOS thì không có: mỗi lần muốn xoá cache hay xem app nào ngốn dung lượng là phải mở Cài đặt, vào Cài đặt chung, vào Dung lượng iPhone, chờ nó tải danh sách, rồi cuộn tìm đúng app. Mất cả phút cho một việc đáng ra chỉ cần hai chạm.
 
@@ -24,6 +24,14 @@ AppInfoPress gộp hai việc đó vào một tweak duy nhất: phần ngoài m�
 - Xoá bộ nhớ đệm chỉ dọn thư mục cache và tmp của app; vài app giấu cache ở chỗ khác (ví dụ dữ liệu web) thì con số giải phóng được sẽ ít hơn kỳ vọng.
 - Tweak chạy trên máy jailbreak của mình: iPhone 12 Pro, iOS 16.3.1, Dopamine rootless. Máy khác, iOS khác chưa được kiểm chứng.
 
+## Có gì mới ở 1.0.2
+
+Bản 1.0.1 vẫn chưa hiện 2 nút và nhảy chưa tới nơi. Lần này mình đọc log thật trên máy (file log ghi lại toàn bộ hoạt động trong Cài đặt) và tìm được đúng nguyên nhân, sửa trúng từng điểm:
+
+- Trang dung lượng của từng app do class `STStorageAppDetailController` dựng, và các mục trong đó **không có tên hiển thị** để mà nhận diện bằng chữ như bản cũ làm. Bản này nhận diện trang bằng chính tên class, đồng thời móc hook sớm hơn hẳn (quét liên tục ngay từ khi Cài đặt mở) để kịp trước khi trang được mở. Mã app cũng được đọc thẳng từ đối tượng dữ liệu của trang, kể cả quét các biến nội bộ của controller.
+- Khâu tự nhảy: bản cũ vớ nhầm trang tổng quan của Dung lượng (trang đó không chứa app nào) và đọc danh sách lúc nó còn trống. Bản này nhắm đúng trang danh sách app `STStorageAppsController`, dò liên tục 0.15 giây một lần ngay khi trang hiện ra — dòng của app vừa xuất hiện là chạm vào liền, cảm giác như nhảy thẳng một mạch.
+- Log được ghi gọn và rõ hơn: trang danh sách được in lại mỗi khi số mục thay đổi (thấy được lúc nó nạp đủ app), để nếu còn trục trặc thì nhìn một cái biết ngay kẹt ở đâu.
+
 ## Có gì mới ở 1.0.1
 
 Bản 1.0.0 cài chạy được nhưng test máy thật lộ hai lỗi, bản này sửa cả hai:
@@ -33,6 +41,6 @@ Bản 1.0.0 cài chạy được nhưng test máy thật lộ hai lỗi, bản n
 
 ## Build
 
-Source Theos (gồm 3 phần: `sb` chích SpringBoard lo menu ấn giữ, `sett` chích Cài đặt lo 2 nút trang dung lượng, `prefs` là trang cài đặt của tweak). File workflow mẫu tên `build-appinfopress-1.0.1.yml` phải được đẩy vào `.github/workflows/build.yml` trên GitHub (GitHub không có sẵn), rồi **commit mới** — nút Re-run chỉ chạy lại workflow của commit cũ. Workflow chạy trên `macos-latest`, có cài `ldid`, xuất 3 bản rootful / rootless / roothide.
+Source Theos (gồm 3 phần: `sb` chích SpringBoard lo menu ấn giữ, `sett` chích Cài đặt lo 2 nút trang dung lượng, `prefs` là trang cài đặt của tweak). File workflow mẫu tên `build-appinfopress-1.0.2.yml` phải được đẩy vào `.github/workflows/build.yml` trên GitHub (GitHub không có sẵn), rồi **commit mới** — nút Re-run chỉ chạy lại workflow của commit cũ. Workflow chạy trên `macos-latest`, có cài `ldid`, xuất 3 bản rootful / rootless / roothide.
 
 Gói: `com.anhdang.appinfopress` — made by Quoc.
