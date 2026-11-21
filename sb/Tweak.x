@@ -245,14 +245,21 @@ static NSArray<UIAction *> *AIPMenuActions(NSString *bundleID, NSString *appName
     NSString *appName = name.length > 0 ? name : AIPAppNameForBundleID(bundleID, bundleID.lastPathComponent);
     NSArray<UIAction *> *extra = AIPMenuActions(bundleID, appName);
     if (extra.count == 0) return config;
-    UIContextMenuActionProvider originalProvider = config.actionProvider;
-    config.actionProvider = ^UIMenu * _Nullable(NSArray<UIMenuElement *> * _Nonnull suggestedActions) {
+    // SDK của Theos không khai báo property actionProvider của UIContextMenuConfiguration
+    // (biên dịch bằng dot-syntax là chết lỗi) — truy cập qua objc_msgSend cho chắc.
+    if (![config respondsToSelector:@selector(actionProvider)] || ![config respondsToSelector:@selector(setActionProvider:)]) {
+        AIPLog(@"UIContextMenuConfiguration khong co actionProvider, bo qua");
+        return config;
+    }
+    UIContextMenuActionProvider originalProvider = ((UIContextMenuActionProvider (*)(id, SEL))objc_msgSend)(config, @selector(actionProvider));
+    UIContextMenuActionProvider newProvider = ^UIMenu * _Nullable(NSArray<UIMenuElement *> * _Nonnull suggestedActions) {
         UIMenu *menu = originalProvider ? originalProvider(suggestedActions) : [UIMenu menuWithChildren:suggestedActions];
         if (!menu) menu = [UIMenu menuWithChildren:suggestedActions];
         NSMutableArray<UIMenuElement *> *children = [menu.children mutableCopy];
         [children addObjectsFromArray:extra];
         return [UIMenu menuWithTitle:menu.title image:menu.image identifier:menu.identifier options:menu.options children:children];
     };
+    ((void (*)(id, SEL, UIContextMenuActionProvider))objc_msgSend)(config, @selector(setActionProvider:), newProvider);
     return config;
 }
 
