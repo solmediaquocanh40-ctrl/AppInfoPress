@@ -240,7 +240,9 @@ static NSArray *(*AIPOriginalSpecifiers)(id self, SEL _cmd) = NULL;
 static id AIPMakeButtonSpecifier(NSString *title, SEL action, int cellType, NSString *kind, NSString *bundleID) {
     Class specClass = NSClassFromString(@"PSSpecifier");
     if (!specClass) return nil;
-    id spec = ((id (*)(id, SEL, id, id, SEL, SEL, Class, int, Class))objc_msgSend)(specClass,
+    // Ép kiểu về PSSpecifier * (không để id): tránh lỗi "multiple methods named
+    // 'setProperty:forKey:'" do NSStream cũng có method trùng tên khác chữ ký.
+    PSSpecifier *spec = (PSSpecifier *)((id (*)(id, SEL, id, id, SEL, SEL, Class, int, Class))objc_msgSend)(specClass,
         @selector(preferenceSpecifierNamed:target:set:get:detail:cell:edit:),
         title, [AIPSettingsHelper sharedHelper], NULL, NULL, Nil, cellType, Nil);
     if (!spec) return nil;
